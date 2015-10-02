@@ -599,6 +599,9 @@ check' v@(Constructor c) ty = do
 check' (Let ds val) ty = do
   (ds', val') <- inferLetBinding [] ds val (`check` ty)
   return $ TypedValue True (Let ds' val') ty
+check' val ty | containsTypeSynonyms ty = do
+  ty' <- introduceSkolemScope <=< expandAllTypeSynonyms <=< replaceTypeWildcards $ ty
+  check val ty'
 check' val kt@(KindedType ty kind) = do
   checkTypeKind ty kind
   val' <- check' val ty
@@ -611,6 +614,12 @@ check' val ty = do
   case mt of
     Nothing -> throwError . errorMessage $ SubsumptionCheckFailed
     Just v' -> return $ TypedValue True v' ty
+
+containsTypeSynonyms :: Type -> Bool
+containsTypeSynonyms = everythingOnTypes (||) go where
+  go (SaturatedTypeSynonym _ _) = True
+  go _ = False
+
 
 -- |
 -- Check the type of a collection of named record fields
