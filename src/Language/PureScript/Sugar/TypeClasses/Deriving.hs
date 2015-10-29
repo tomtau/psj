@@ -46,7 +46,7 @@ import qualified Language.PureScript.Constants as C
 
 -- | Elaborates deriving instance declarations by code generation.
 deriveInstances ::  (Functor m, Applicative m, MonadError MultipleErrors m, MonadSupply m) => Module -> m Module
-deriveInstances (Module ss coms mn ds exts) = Module ss coms mn <$> mapM (deriveInstance mn ds) ds <*> pure exts
+deriveInstances (Module header ds) = Module header <$> mapM (deriveInstance (mhModuleName header) ds) ds
 
 -- | Takes a declaration, and if the declaration is a deriving TypeInstanceDeclaration,
 -- elaborates that into an instance declaration via code generation.

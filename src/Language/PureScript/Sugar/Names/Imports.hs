@@ -15,6 +15,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE RecordWildCards #-}
 
 module Language.PureScript.Sugar.Names.Imports
   ( resolveImports
@@ -42,15 +43,13 @@ import Language.PureScript.Sugar.Names.Env
 
 -- Finds the imports within a module, mapping the imported module name to an optional set of
 -- explicitly imported declarations.
-findImports :: forall m. (Applicative m, MonadError MultipleErrors m, MonadWriter MultipleErrors m) => [Declaration] -> m (M.Map ModuleName [(Maybe SourceSpan, ImportDeclarationType, Maybe ModuleName)])
+findImports :: forall m. (Applicative m, MonadError MultipleErrors m, MonadWriter MultipleErrors m) => [ImportDeclaration] -> m (M.Map ModuleName [(Maybe SourceSpan, ImportDeclarationType, Maybe ModuleName)])
 findImports = foldM (go Nothing) M.empty
   where
   go pos result (ImportDeclaration mn typ qual) = do
     checkImportRefType typ
     let imp = (pos, typ, qual)
     return $ M.insert mn (maybe [imp] (imp :) (mn `M.lookup` result)) result
-  go _ result (PositionedDeclaration pos _ d) = rethrowWithPosition pos $ go (Just pos) result d
-  go _ result _ = return result
 
   -- Ensure that classes don't appear in an `import X hiding (...)`
   checkImportRefType :: ImportDeclarationType -> m ()
@@ -64,10 +63,10 @@ findImports = foldM (go Nothing) M.empty
 -- Constructs a set of imports for a module.
 --
 resolveImports :: (Applicative m, MonadError MultipleErrors m, MonadWriter MultipleErrors m) => Env -> Module -> m Imports
-resolveImports env (Module _ _ currentModule decls _) =
-  censor (addHint (ErrorInModule currentModule)) $ do
-    scope <- M.insert currentModule [(Nothing, Implicit, Nothing)] <$> findImports decls
-    foldM (resolveModuleImport currentModule env) nullImports (M.toList scope)
+resolveImports env (Module ModuleHeader{..} _) =
+  censor (addHint (ErrorInModule mhModuleName)) $ do
+    scope <- M.insert mhModuleName [(Nothing, Implicit, Nothing)] <$> findImports mhImports
+    foldM (resolveModuleImport mhModuleName env) nullImports (M.toList scope)
 
 -- | Constructs a set of imports for a single module import.
 resolveModuleImport ::
@@ -75,13 +74,13 @@ resolveModuleImport ::
   ModuleName -> Env -> Imports ->
   (ModuleName, [(Maybe SourceSpan, ImportDeclarationType, Maybe ModuleName)]) ->
   m Imports
-resolveModuleImport currentModule env ie (mn, imps) = foldM go ie imps
+resolveModuleImport mhModuleName env ie (mn, imps) = foldM go ie imps
   where
   go :: Imports -> (Maybe SourceSpan, ImportDeclarationType, Maybe ModuleName) -> m Imports
   go ie' (pos, typ, impQual) = do
     modExports <- positioned $ maybe (throwError . errorMessage $ UnknownModule mn) (return . envModuleExports) $ mn `M.lookup` env
     let ie'' = ie' { importedModules = mn : importedModules ie' }
-    positioned $ resolveImport currentModule mn modExports ie'' impQual typ
+    positioned $ resolveImport mhModuleName mn modExports ie'' impQual typ
     where
     positioned err = case pos of
       Nothing -> err
@@ -91,7 +90,7 @@ resolveModuleImport currentModule env ie (mn, imps) = foldM go ie imps
 -- Extends the local environment for a module by resolving an import of another module.
 --
 resolveImport :: forall m. (Applicative m, MonadError MultipleErrors m, MonadWriter MultipleErrors m) => ModuleName -> ModuleName -> Exports -> Imports -> Maybe ModuleName -> ImportDeclarationType -> m Imports
-resolveImport currentModule importModule exps imps impQual =
+resolveImport mhModuleName importModule exps imps impQual =
   resolveByType
   where
 
@@ -203,7 +202,7 @@ resolveImport currentModule importModule exps imps impQual =
        | mnOrig == fromMaybe (internalError "Invalid state in updateImports") (name `lookup` exps') -> return imps'
        | otherwise -> throwError . errorMessage $ err
         where
-        err = if currentModule `elem` [mn, importModule]
+        err = if mhModuleName `elem` [mn, importModule]
               then ConflictingImport (render name) importModule
               else ConflictingImports (render name) mn importModule
 

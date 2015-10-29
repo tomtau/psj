@@ -65,16 +65,16 @@ parseAndDesugar inputFiles depsFiles callback = do
 parseFiles ::
   [(FileInfo, FilePath)]
   -> ExceptT ParseDesugarError IO [(FileInfo, P.Module)]
-parseFiles =
-  throwLeft ParseError . P.parseModulesFromFiles fileInfoToString
+parseFiles files = throwLeft ParseError $ mapM (\(fi, path) -> (,) fi <$> P.parseModuleFromFile path (fileInfoToString fi)) files
 
 sortModules ::
   [P.Module]
   -> ExceptT ParseDesugarError IO [P.Module]
 sortModules =
-  fmap fst . throwLeft SortModulesError . sortModules' . map importPrim
+  --fmap fst . throwLeft SortModulesError . sortModules' . map importPrim
+  return
   where
-  sortModules' :: [P.Module] -> Either P.MultipleErrors ([P.Module], P.ModuleGraph)
+  sortModules' :: [P.ModuleHeader] -> Either P.MultipleErrors ([P.ModuleHeader], P.ModuleGraph)
   sortModules' = P.sortModules
 
 desugarWithBookmarks ::
@@ -106,16 +106,15 @@ fileInfoToString :: FileInfo -> FilePath
 fileInfoToString (Local fn) = fn
 fileInfoToString (FromDep _ fn) = fn
 
-addDefaultImport :: P.ModuleName -> P.Module -> P.Module
-addDefaultImport toImport m@(P.Module ss coms mn decls exps)  =
-  if isExistingImport `any` decls || mn == toImport then m
-  else P.Module ss coms mn (P.ImportDeclaration toImport P.Implicit Nothing : decls) exps
+addDefaultImport :: P.ModuleName -> P.ModuleHeader -> P.ModuleHeader
+addDefaultImport toImport header =
+  if isExistingImport `any` P.mhImports header || P.mhModuleName header == toImport
+    then header
+    else header { P.mhImports = P.ImportDeclaration toImport P.Implicit Nothing : P.mhImports header }
   where
-  isExistingImport (P.ImportDeclaration mn' _ _) | mn' == toImport = True
-  isExistingImport (P.PositionedDeclaration _ _ d) = isExistingImport d
-  isExistingImport _ = False
+  isExistingImport (P.ImportDeclaration mn' _ _) = mn' == toImport
 
-importPrim :: P.Module -> P.Module
+importPrim :: P.ModuleHeader -> P.ModuleHeader
 importPrim = addDefaultImport (P.ModuleName [P.ProperName C.prim])
 
 desugar :: [P.Module] -> Either P.MultipleErrors [P.Module]

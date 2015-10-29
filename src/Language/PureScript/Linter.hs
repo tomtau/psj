@@ -41,7 +41,7 @@ import Language.PureScript.Linter.Exhaustive as L
 -- |
 -- | Right now, this pass only performs a shadowing check.
 lint :: forall m. (Applicative m, MonadWriter MultipleErrors m) => Module -> m ()
-lint (Module _ _ mn ds _) = censor (addHint (ErrorInModule mn)) $ mapM_ lintDeclaration ds
+lint (Module header ds) = censor (addHint (ErrorInModule (mhModuleName header))) $ mapM_ lintDeclaration ds
   where
   moduleNames :: S.Set Ident
   moduleNames = S.fromList (nub (mapMaybe getDeclIdent ds))

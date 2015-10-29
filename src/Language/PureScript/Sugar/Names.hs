@@ -91,21 +91,23 @@ desugarImports externs modules = do
       toExportedValue _ = Nothing
 
   updateEnv :: Env -> Module -> m Env
-  updateEnv env m@(Module ss _ mn _ refs) =
-    case mn `M.lookup` env of
+  updateEnv env m@(Module header _) =
+    let ss = mhSourceSpan header
+        mn = mhModuleName header in
+    case mhModuleName header `M.lookup` env of
       Just m' -> throwError . errorMessage $ RedefinedModule mn [envModuleSourceSpan m', ss]
       Nothing -> do
         members <- findExportable m
         let env' = M.insert mn (ss, nullImports, members) env
         imps <- resolveImports env' m
-        exps <- maybe (return members) (resolveExports env' mn imps members) refs
+        exps <- maybe (return members) (resolveExports env' mn imps members) (mhExports header)
         return $ M.insert mn (ss, imps, exps) env
 
   renameInModule' :: Env -> Module -> m Module
-  renameInModule' env m@(Module _ _ mn _ _) =
-    rethrow (addHint (ErrorInModule mn)) $ do
-      let (_, imps, exps) = fromMaybe (internalError "Module is missing in renameInModule'") $ M.lookup mn env
-      elaborateImports imps <$> renameInModule env imps (elaborateExports exps m)
+  renameInModule' env m@(Module header _) =
+    rethrow (addHint (ErrorInModule (mhModuleName header))) $ do
+      let (_, imps, exps) = fromMaybe (internalError "Module is missing in renameInModule'") $ M.lookup (mhModuleName header) env
+      renameInModule env imps (elaborateExports exps m)
 
 -- |
 -- Make all exports for a module explicit. This may still effect modules that
@@ -113,42 +115,25 @@ desugarImports externs modules = do
 -- explicit.
 --
 elaborateExports :: Exports -> Module -> Module
-elaborateExports exps (Module ss coms mn decls refs) =
-  Module ss coms mn decls $
+elaborateExports exps (Module header decls) = Module (header { mhExports = mhExports' }) decls
+  where
+  mhExports' =
     Just $ map (\(ctor, dctors) -> TypeRef ctor (Just dctors)) (my exportedTypes) ++
            map TypeClassRef (my exportedTypeClasses) ++
            map ValueRef (my exportedValues) ++
-           maybe [] (filter isModuleRef) refs
-  where
+           maybe [] (filter isModuleRef) (mhExports header)
   -- Extracts a list of values from the exports and filters out any values that
   -- are re-exports from other modules.
   my :: (Exports -> [(a, ModuleName)]) -> [a]
-  my f = fst `map` filter ((== mn) . snd) (f exps)
-
--- |
--- Add `import X ()` for any modules where there are only fully qualified references to members.
--- This ensures transitive instances are included when using a member from a module.
---
-elaborateImports :: Imports -> Module -> Module
-elaborateImports imps (Module ss coms mn decls exps) = Module ss coms mn decls' exps
-  where
-  decls' :: [Declaration]
-  decls' =
-    let (f, _, _, _, _) = everythingOnValues (++) (const []) fqValues (const []) (const []) (const [])
-    in mkImport `map` nub (f `concatMap` decls) ++ decls
-  fqValues :: Expr -> [ModuleName]
-  fqValues (Var (Qualified (Just mn') _)) | mn' `notElem` importedModules imps = [mn']
-  fqValues _ = []
-  mkImport :: ModuleName -> Declaration
-  mkImport mn' = ImportDeclaration mn' (Explicit []) Nothing
+  my f = fst `map` filter ((== mhModuleName header) . snd) (f exps)
 
 -- |
 -- Replaces all local names with qualified names within a module and checks that all existing
 -- qualified names are valid.
 --
 renameInModule :: forall m. (Applicative m, MonadError MultipleErrors m) => Env -> Imports -> Module -> m Module
-renameInModule env imports (Module ss coms mn decls exps) =
-  Module ss coms mn <$> parU decls go <*> pure exps
+renameInModule env imports (Module header decls) =
+  Module header <$> parU decls go
   where
   (go, _, _, _, _) = everywhereWithContextOnValuesM (Nothing, []) updateDecl updateValue updateBinder updateCase defS
 

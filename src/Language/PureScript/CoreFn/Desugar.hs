@@ -12,18 +12,19 @@
 --
 -----------------------------------------------------------------------------
 
+{-# LANGUAGE RecordWildCards #-}
+
 module Language.PureScript.CoreFn.Desugar (moduleToCoreFn) where
 
 import Data.Function (on)
 import Data.List (sort, sortBy, nub)
-import Data.Maybe (mapMaybe)
+import Data.Maybe (fromMaybe, mapMaybe)
 import qualified Data.Map as M
 
 import Control.Arrow (second, (***))
 
 import Language.PureScript.Crash
 import Language.PureScript.AST.SourcePos
-import Language.PureScript.AST.Traversals
 import Language.PureScript.CoreFn.Ann
 import Language.PureScript.CoreFn.Binders
 import Language.PureScript.CoreFn.Expr
@@ -41,16 +42,17 @@ import qualified Language.PureScript.AST as A
 -- Desugars a module from AST to CoreFn representation.
 --
 moduleToCoreFn :: Environment -> A.Module -> Module Ann
-moduleToCoreFn _ (A.Module _ _ _ _ Nothing) =
-  internalError "Module exports were not elaborated before moduleToCoreFn"
-moduleToCoreFn env (A.Module _ coms mn decls (Just exps)) =
-  let imports = nub $ mapMaybe importToCoreFn decls ++ findQualModules decls
+moduleToCoreFn env (A.Module A.ModuleHeader{..} decls) =
+  let imports = nub $ map A.idModuleName mhImports
       exps' = nub $ concatMap exportToCoreFn exps
       externs = nub $ mapMaybe externToCoreFn decls
       decls' = concatMap (declToCoreFn Nothing []) decls
-  in Module coms mn imports exps' externs decls'
+  in Module mhComments mhModuleName imports exps' externs decls'
 
   where
+
+  exps :: [A.DeclarationRef]
+  exps = fromMaybe (internalError "Module exports were not elaborated before moduleToCoreFn") mhExports
 
   -- |
   -- Desugars member declarations from AST to CoreFn representation.
@@ -63,7 +65,7 @@ moduleToCoreFn env (A.Module _ coms mn decls (Just exps)) =
     error $ "Found newtype with multiple constructors: " ++ show d
   declToCoreFn ss com (A.DataDeclaration Data tyName _ ctors) =
     flip map ctors $ \(ctor, _) ->
-      let (_, _, _, fields) = lookupConstructor env (Qualified (Just mn) ctor)
+      let (_, _, _, fields) = lookupConstructor env (Qualified (Just mhModuleName) ctor)
       in NonRec (properToIdent ctor) $ Constructor (ss, com, Nothing, Nothing) tyName ctor fields
   declToCoreFn ss _   (A.DataBindingGroupDeclaration ds) = concatMap (declToCoreFn ss []) ds
   declToCoreFn ss com (A.ValueDeclaration name _ _ (Right e)) =
@@ -99,7 +101,7 @@ moduleToCoreFn env (A.Module _ coms mn decls (Just exps)) =
   exprToCoreFn ss com ty (A.Abs (Left name) v) =
     Abs (ss, com, ty, Nothing) name (exprToCoreFn ss [] Nothing v)
   exprToCoreFn _ _ _ (A.Abs _ _) =
-    internalError "Abs with Binder argument was not desugared before exprToCoreFn mn"
+    internalError "Abs with Binder argument was not desugared before exprToCoreFn"
   exprToCoreFn ss com ty (A.App v1 v2) =
     App (ss, com, ty, Nothing) (exprToCoreFn ss [] Nothing v1) (exprToCoreFn ss [] Nothing v2)
   exprToCoreFn ss com ty (A.Var ident) =
@@ -128,7 +130,7 @@ moduleToCoreFn env (A.Module _ coms mn decls (Just exps)) =
   exprToCoreFn _ com ty (A.PositionedValue ss com1 v) =
     exprToCoreFn (Just ss) (com ++ com1) ty v
   exprToCoreFn _ _ _ e =
-    error $ "Unexpected value in exprToCoreFn mn: " ++ show e
+    error $ "Unexpected value in exprToCoreFn: " ++ show e
 
   -- |
   -- Desugars case alternatives from AST to CoreFn representation.
@@ -195,33 +197,6 @@ moduleToCoreFn env (A.Module _ coms mn decls (Just exps)) =
     typeConstructor :: (Qualified ProperName, (DataDeclType, ProperName, Type, [Ident])) -> (ModuleName, ProperName)
     typeConstructor (Qualified (Just mn') _, (_, tyCtor, _, _)) = (mn', tyCtor)
     typeConstructor _ = internalError "Invalid argument to typeConstructor"
-
--- |
--- Find module names from qualified references to values. This is used to
--- ensure instances are imported from any module that is referenced by the
--- current module, not just from those that are imported explicitly (#667).
---
-findQualModules :: [A.Declaration] -> [ModuleName]
-findQualModules decls =
-  let (f, _, _, _, _) = everythingOnValues (++) (const []) fqValues fqBinders (const []) (const [])
-  in f `concatMap` decls
-  where
-  fqValues :: A.Expr -> [ModuleName]
-  fqValues (A.Var (Qualified (Just mn) _)) = [mn]
-  fqValues (A.Constructor (Qualified (Just mn) _)) = [mn]
-  fqValues _ = []
-
-  fqBinders :: A.Binder -> [ModuleName]
-  fqBinders (A.ConstructorBinder (Qualified (Just mn) _) _) = [mn]
-  fqBinders _ = []
-
--- |
--- Desugars import declarations from AST to CoreFn representation.
---
-importToCoreFn :: A.Declaration -> Maybe ModuleName
-importToCoreFn (A.ImportDeclaration name _ _) = Just name
-importToCoreFn (A.PositionedDeclaration _ _ d) = importToCoreFn d
-importToCoreFn _ = Nothing
 
 -- |
 -- Desugars foreign declarations from AST to CoreFn representation.

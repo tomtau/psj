@@ -16,6 +16,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE RecordWildCards #-}
 
 module Language.PureScript.Sugar.Names.Exports
   ( findExportable
@@ -43,22 +44,22 @@ import Language.PureScript.Sugar.Names.Env
 -- Finds all exportable members of a module, disregarding any explicit exports.
 --
 findExportable :: forall m. (Applicative m, MonadError MultipleErrors m) => Module -> m Exports
-findExportable (Module _ _ mn ds _) =
-  rethrow (addHint (ErrorInModule mn)) $ foldM updateExports nullExports ds
+findExportable (Module ModuleHeader{..} ds) =
+  rethrow (addHint (ErrorInModule mhModuleName)) $ foldM updateExports nullExports ds
   where
   updateExports :: Exports -> Declaration -> m Exports
   updateExports exps (TypeClassDeclaration tcn _ _ ds') = do
-    exps' <- exportTypeClass exps tcn mn
+    exps' <- exportTypeClass exps tcn mhModuleName
     foldM go exps' ds'
     where
-    go exps'' (TypeDeclaration name _) = exportValue exps'' name mn
+    go exps'' (TypeDeclaration name _) = exportValue exps'' name mhModuleName
     go exps'' (PositionedDeclaration pos _ d) = rethrowWithPosition pos $ go exps'' d
     go _ _ = internalError "Invalid declaration in TypeClassDeclaration"
-  updateExports exps (DataDeclaration _ tn _ dcs) = exportType exps tn (map fst dcs) mn
-  updateExports exps (TypeSynonymDeclaration tn _ _) = exportType exps tn [] mn
-  updateExports exps (ExternDataDeclaration tn _) = exportType exps tn [] mn
-  updateExports exps (ValueDeclaration name _ _ _) = exportValue exps name mn
-  updateExports exps (ExternDeclaration name _) = exportValue exps name mn
+  updateExports exps (DataDeclaration _ tn _ dcs) = exportType exps tn (map fst dcs) mhModuleName
+  updateExports exps (TypeSynonymDeclaration tn _ _) = exportType exps tn [] mhModuleName
+  updateExports exps (ExternDataDeclaration tn _) = exportType exps tn [] mhModuleName
+  updateExports exps (ValueDeclaration name _ _ _) = exportValue exps name mhModuleName
+  updateExports exps (ExternDeclaration name _) = exportValue exps name mhModuleName
   updateExports exps (PositionedDeclaration pos _ d) = rethrowWithPosition pos $ updateExports exps d
   updateExports exps _ = return exps
 

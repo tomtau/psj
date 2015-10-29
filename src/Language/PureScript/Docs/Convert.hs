@@ -25,10 +25,10 @@ import Language.PureScript.Docs.Types
 -- Convert a single Module.
 --
 convertModule :: P.Module -> Module
-convertModule m@(P.Module _ coms moduleName  _ _) =
-  Module (P.runModuleName moduleName) comments (declarations m)
+convertModule m@(P.Module header _) =
+  Module (P.runModuleName (P.mhModuleName header)) comments (declarations m)
   where
-  comments = convertComments coms
+  comments = convertComments (P.mhComments header)
   declarations =
     P.exportedDeclarations
     >>> mapMaybe (\d -> getDeclarationTitle d >>= convertDeclaration d)

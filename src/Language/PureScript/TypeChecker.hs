@@ -14,6 +14,7 @@
 -----------------------------------------------------------------------------
 
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE CPP #-}
 
 module Language.PureScript.TypeChecker (
@@ -213,7 +214,6 @@ typeCheckAll moduleName _ ds = mapM go ds <* mapM_ checkOrphanFixities ds
         Nothing -> putEnv (env { names = M.insert (moduleName, name) (ty, External, Defined) (names env) })
     return d
   go (d@(FixityDeclaration{})) = return d
-  go (d@(ImportDeclaration{})) = return d
   go (d@(TypeClassDeclaration pn args implies tys)) = do
     addTypeClass moduleName pn args implies tys
     return d
@@ -282,32 +282,34 @@ typeCheckAll moduleName _ ds = mapM go ds <* mapM_ checkOrphanFixities ds
 -- required by exported members are also exported.
 --
 typeCheckModule :: Module -> Check Module
-typeCheckModule (Module _ _ _ _ Nothing) = internalError "exports should have been elaborated"
-typeCheckModule (Module ss coms mn decls (Just exps)) = warnAndRethrow (addHint (ErrorInModule mn)) $ do
-  modify (\s -> s { checkCurrentModule = Just mn })
-  decls' <- typeCheckAll mn exps decls
+typeCheckModule (Module header@ModuleHeader{..} decls) = warnAndRethrow (addHint (ErrorInModule mhModuleName)) $ do
+  modify (\s -> s { checkCurrentModule = Just mhModuleName })
+  decls' <- typeCheckAll mhModuleName exps decls
   forM_ exps $ \e -> do
     checkTypesAreExported e
     checkClassMembersAreExported e
     checkClassesAreExported e
-  return $ Module ss coms mn decls' (Just exps)
+  return $ Module header decls'
   where
+
+  exps :: [DeclarationRef]
+  exps = fromMaybe (internalError "exports should have been elaborated") mhExports
 
   checkMemberExport :: (Type -> [DeclarationRef]) -> DeclarationRef -> Check ()
   checkMemberExport extract dr@(TypeRef name dctors) = do
     env <- getEnv
-    case M.lookup (Qualified (Just mn) name) (typeSynonyms env) of
+    case M.lookup (Qualified (Just mhModuleName) name) (typeSynonyms env) of
       Nothing -> return ()
       Just (_, ty) -> checkExport dr extract ty
     case dctors of
       Nothing -> return ()
       Just dctors' -> forM_ dctors' $ \dctor ->
-        case M.lookup (Qualified (Just mn) dctor) (dataConstructors env) of
+        case M.lookup (Qualified (Just mhModuleName) dctor) (dataConstructors env) of
           Nothing -> return ()
           Just (_, _, ty, _) -> checkExport dr extract ty
     return ()
   checkMemberExport extract dr@(ValueRef name) = do
-    ty <- lookupVariable mn (Qualified (Just mn) name)
+    ty <- lookupVariable mhModuleName (Qualified (Just mhModuleName) name)
     checkExport dr extract ty
   checkMemberExport _ _ = return ()
 
@@ -332,7 +334,7 @@ typeCheckModule (Module ss coms mn decls (Just exps)) = warnAndRethrow (addHint 
     findTcons :: Type -> [DeclarationRef]
     findTcons = everythingOnTypes (++) go
       where
-      go (TypeConstructor (Qualified (Just mn') name)) | mn' == mn = [TypeRef name (internalError "Data constructors unused in checkTypesAreExported")]
+      go (TypeConstructor (Qualified (Just mn) name)) | mn == mhModuleName = [TypeRef name (internalError "Data constructors unused in checkTypesAreExported")]
       go _ = []
 
   -- Check that all the classes defined in the current module that appear in member types have also
@@ -346,7 +348,7 @@ typeCheckModule (Module ss coms mn decls (Just exps)) = warnAndRethrow (addHint 
       go (ConstrainedType cs _) = mapMaybe (fmap TypeClassRef . extractCurrentModuleClass . fst) cs
       go _ = []
     extractCurrentModuleClass :: Qualified ProperName -> Maybe ProperName
-    extractCurrentModuleClass (Qualified (Just mn') name) | mn == mn' = Just name
+    extractCurrentModuleClass (Qualified (Just mn) name) | mn == mhModuleName = Just name
     extractCurrentModuleClass _ = Nothing
 
   checkClassMembersAreExported :: DeclarationRef -> Check ()

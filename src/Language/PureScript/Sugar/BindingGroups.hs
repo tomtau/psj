@@ -48,13 +48,13 @@ import Language.PureScript.Errors
 -- Replace all sets of mutually-recursive declarations in a module with binding groups
 --
 createBindingGroupsModule :: (Functor m, Applicative m, MonadError MultipleErrors m) => [Module] -> m [Module]
-createBindingGroupsModule = mapM $ \(Module ss coms name ds exps) -> Module ss coms name <$> createBindingGroups name ds <*> pure exps
+createBindingGroupsModule = mapM $ \(Module header ds) -> Module header <$> createBindingGroups (mhModuleName header) ds
 
 -- |
 -- Collapse all binding groups in a module to individual declarations
 --
 collapseBindingGroupsModule :: [Module] -> [Module]
-collapseBindingGroupsModule = map $ \(Module ss coms name ds exps) -> Module ss coms name (collapseBindingGroups ds) exps
+collapseBindingGroupsModule = map $ \(Module header ds) -> Module header (collapseBindingGroups ds)
 
 createBindingGroups :: forall m. (Functor m, Applicative m, MonadError MultipleErrors m) => ModuleName -> [Declaration] -> m [Declaration]
 createBindingGroups moduleName = mapM f <=< handleDecls
@@ -79,8 +79,7 @@ createBindingGroups moduleName = mapM f <=< handleDecls
     let allIdents = map getIdent values
         valueVerts = map (\d -> (d, getIdent d, usedIdents moduleName d `intersect` allIdents)) values
     bindingGroupDecls <- parU (stronglyConnComp valueVerts) (toBindingGroup moduleName)
-    return $ filter isImportDecl ds ++
-             filter isExternDataDecl ds ++
+    return $ filter isExternDataDecl ds ++
              dataBindingGroupDecls ++
              filter isTypeClassDeclaration ds ++
              filter isTypeClassInstanceDeclaration ds ++

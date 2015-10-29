@@ -20,8 +20,9 @@
 module Language.PureScript.Parser.Declarations (
     parseDeclaration,
     parseModule,
-    parseModules,
-    parseModulesFromFiles,
+    parseModuleHeader,
+    parseModuleFromFile,
+    parseModuleHeaderFromFile,
     parseValue,
     parseGuard,
     parseBinder,
@@ -138,11 +139,6 @@ parseFixityDeclaration = do
   name <- symbol
   return $ FixityDeclaration fixity name
 
-parseImportDeclaration :: TokenParser Declaration
-parseImportDeclaration = do
-  (mn, declType, asQ) <- parseImportDeclaration'
-  return $ ImportDeclaration mn declType asQ
-
 parseImportDeclaration' :: TokenParser (ModuleName, ImportDeclarationType, Maybe ModuleName)
 parseImportDeclaration' = do
   reserved "import"
@@ -245,7 +241,6 @@ parseDeclaration = positioned (P.choice
                    , parseValueDeclaration
                    , parseExternDeclaration
                    , parseFixityDeclaration
-                   , parseImportDeclaration
                    , parseTypeClassDeclaration
                    , parseTypeInstanceDeclaration
                    , parseDerivingInstanceDeclaration
@@ -257,11 +252,9 @@ parseLocalDeclaration = positioned (P.choice
                    , parseValueDeclaration
                    ] P.<?> "local declaration")
 
--- |
--- Parse a module header and a collection of declarations
---
-parseModule :: TokenParser Module
-parseModule = do
+-- | Parse a module header
+parseModuleHeader :: TokenParser ModuleHeader
+parseModuleHeader = do
   comments <- C.readComments
   start <- P.getPosition
   reserved "module"
@@ -269,28 +262,38 @@ parseModule = do
   name <- moduleName
   exports <- P.optionMaybe $ parens $ commaSep1 parseDeclarationRef
   reserved "where"
-  decls <- mark (P.many (same *> parseDeclaration))
+  imports <- mark (P.many (same *> parseImportDeclaration))
   end <- P.getPosition
   let ss = SourceSpan (P.sourceName start) (toSourcePos start) (toSourcePos end)
-  return $ Module ss comments name decls exports
-
--- |
--- Parse a collection of modules
---
-parseModulesFromFiles :: forall m k. (MonadError MultipleErrors m, Functor m) =>
-                                     (k -> FilePath) -> [(k, String)] -> m [(k, Module)]
-parseModulesFromFiles toFilePath input = do
-  modules <- parU input $ \(k, content) -> do
-    let filename = toFilePath k
-    ts <- wrapError $ lex filename content
-    ms <- wrapError $ runTokenParser filename parseModules ts
-    return (k, ms)
-  return $ collect modules
+  return $ ModuleHeader ss comments name imports exports
   where
-  wrapError :: Either P.ParseError a -> m a
+  parseImportDeclaration :: TokenParser ImportDeclaration
+  parseImportDeclaration = do
+    (mn, declType, asQ) <- parseImportDeclaration'
+    return $ ImportDeclaration mn declType asQ
+
+-- | Parse a module header and a collection of declarations
+parseModule :: TokenParser Module
+parseModule = do
+  header <- parseModuleHeader
+  decls <- mark (P.many (same *> parseDeclaration))
+  return $ Module header decls
+
+parseFromFile :: forall m a. (MonadError MultipleErrors m, Functor m) => TokenParser a -> FilePath -> String -> m a
+parseFromFile p filename content = do
+  ts <- wrapError $ lex filename content
+  wrapError $ runTokenParser filename p ts
+  where
+  wrapError :: forall t. Either P.ParseError t -> m t
   wrapError = either (throwError . MultipleErrors . pure . toPositionedError) return
-  collect :: [(k, [v])] -> [(k, v)]
-  collect vss = [ (k, v) | (k, vs) <- vss, v <- vs ]
+
+-- | Parse a module from a text file
+parseModuleFromFile :: forall m. (MonadError MultipleErrors m, Functor m) => FilePath -> String -> m Module
+parseModuleFromFile = parseFromFile (parseModule <* P.eof)
+
+-- | Parse a module header from a text file
+parseModuleHeaderFromFile :: forall m. (MonadError MultipleErrors m, Functor m) => FilePath -> String -> m ModuleHeader
+parseModuleHeaderFromFile = parseFromFile parseModuleHeader
 
 toPositionedError :: P.ParseError -> ErrorMessage
 toPositionedError perr = ErrorMessage [ PositionedError (SourceSpan name start end) ] (ErrorParsingModule perr)
@@ -301,12 +304,6 @@ toPositionedError perr = ErrorMessage [ PositionedError (SourceSpan name start e
 
 toSourcePos :: P.SourcePos -> SourcePos
 toSourcePos pos = SourcePos (P.sourceLine pos) (P.sourceColumn pos)
-
--- |
--- Parse a collection of modules
---
-parseModules :: TokenParser [Module]
-parseModules = mark (P.many (same *> parseModule)) <* P.eof
 
 booleanLiteral :: TokenParser Bool
 booleanLiteral = (reserved "true" >> return True) P.<|> (reserved "false" >> return False)

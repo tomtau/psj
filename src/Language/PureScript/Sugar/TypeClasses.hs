@@ -32,21 +32,22 @@ import Language.PureScript.Kinds
 import Language.PureScript.Names
 import Language.PureScript.Externs
 import Language.PureScript.Sugar.CaseDeclarations
-import Control.Monad.Supply.Class
 import Language.PureScript.Types
 
 import qualified Language.PureScript.Constants as C
+
+import Data.List ((\\), find, sortBy)
+import Data.Maybe (catMaybes, fromMaybe, mapMaybe, isJust)
+
+import qualified Data.Map as M
 
 #if __GLASGOW_HASKELL__ < 710
 import Control.Applicative
 #endif
 import Control.Arrow (first, second)
+import Control.Monad.Supply.Class
 import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.State
-import Data.List ((\\), find, sortBy)
-import Data.Maybe (catMaybes, mapMaybe, isJust)
-
-import qualified Data.Map as M
 
 type MemberMap = M.Map (ModuleName, ProperName) ([(String, Maybe Kind)], [Constraint], [Declaration])
 
@@ -67,16 +68,16 @@ desugarTypeClasses externs = flip evalStateT initialState . mapM desugarModule
   fromExternsDecl _ _ = Nothing
 
 desugarModule :: (Functor m, Applicative m, MonadSupply m, MonadError MultipleErrors m) => Module -> Desugar m Module
-desugarModule (Module ss coms name decls (Just exps)) = do
-  (newExpss, declss) <- unzip <$> parU (sortBy classesFirst decls) (desugarDecl name exps)
-  return $ Module ss coms name (concat declss) $ Just (exps ++ catMaybes newExpss)
+desugarModule (Module header decls) = do
+  let exps = fromMaybe (internalError "desugarModule: exports were not desugared") (mhExports header)
+  (newExpss, declss) <- unzip <$> parU (sortBy classesFirst decls) (desugarDecl (mhModuleName header) exps)
+  return $ Module (header { mhExports = Just (exps ++ catMaybes newExpss) }) (concat declss)
   where
   classesFirst :: Declaration -> Declaration -> Ordering
   classesFirst d1 d2
     | isTypeClassDeclaration d1 && not (isTypeClassDeclaration d2) = LT
     | not (isTypeClassDeclaration d1) && isTypeClassDeclaration d2 = GT
     | otherwise = EQ
-desugarModule _ = internalError "Exports should have been elaborated in name desugaring"
 
 {- Desugar type class and type class instance declarations
 --

@@ -23,12 +23,13 @@ import Language.PureScript.Names
 -- instances will be incorrectly removed in some cases.
 --
 exportedDeclarations :: Module -> [Declaration]
-exportedDeclarations (Module _ _ _ decls exps) = go decls
+exportedDeclarations (Module header decls) = go decls
   where
   go = flattenDecls
         >>> filter (isExported exps)
         >>> map (filterDataConstructors exps)
         >>> filterInstances exps
+  exps = mhExports header
 
 -- |
 -- Filter out all data constructors from a declaration which are not exported.

@@ -308,4 +308,4 @@ checkExhaustiveDecls env mn = mapM_ onDecl
 -- Exhaustivity checking over a single module
 --
 checkExhaustiveModule :: forall m. (Applicative m, MonadWriter MultipleErrors m) => Environment -> Module -> m ()
-checkExhaustiveModule env (Module _ _ mn ds _) = censor (addHint (ErrorInModule mn)) $ checkExhaustiveDecls env mn ds
+checkExhaustiveModule env (Module header ds) = censor (addHint (ErrorInModule (mhModuleName header))) $ checkExhaustiveDecls env (mhModuleName header) ds

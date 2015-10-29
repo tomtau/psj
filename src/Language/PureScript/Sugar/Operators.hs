@@ -63,7 +63,7 @@ rebracket externs ms = do
   mapM (rebracketModule opTable) ms
 
 removeSignedLiterals :: Module -> Module
-removeSignedLiterals (Module ss coms mn ds exts) = Module ss coms mn (map f' ds) exts
+removeSignedLiterals (Module header ds) = Module header (map f' ds)
   where
   (f', _, _) = everywhereOnValues id go id
 
@@ -71,9 +71,9 @@ removeSignedLiterals (Module ss coms mn ds exts) = Module ss coms mn (map f' ds)
   go other = other
 
 rebracketModule :: (Applicative m, MonadError MultipleErrors m) => [[(Qualified Ident, Expr -> Expr -> Expr, Associativity)]] -> Module -> m Module
-rebracketModule opTable (Module ss coms mn ds exts) =
+rebracketModule opTable (Module header ds) =
   let (f, _, _) = everywhereOnValuesTopDownM return (matchOperators opTable) return
-  in Module ss coms mn <$> (map removeParens <$> parU ds f) <*> pure exts
+  in Module header <$> (map removeParens <$> parU ds f)
 
 removeParens :: Declaration -> Declaration
 removeParens =
@@ -90,10 +90,10 @@ externsFixities ExternsFile{..} =
   ]
 
 collectFixities :: Module -> [(Qualified Ident, SourceSpan, Fixity)]
-collectFixities (Module _ _ moduleName ds _) = concatMap collect ds
+collectFixities (Module ModuleHeader{..} ds) = concatMap collect ds
   where
   collect :: Declaration -> [(Qualified Ident, SourceSpan, Fixity)]
-  collect (PositionedDeclaration pos _ (FixityDeclaration fixity name)) = [(Qualified (Just moduleName) (Op name), pos, fixity)]
+  collect (PositionedDeclaration pos _ (FixityDeclaration fixity name)) = [(Qualified (Just mhModuleName) (Op name), pos, fixity)]
   collect FixityDeclaration{} = internalError "Fixity without srcpos info"
   collect _ = []
 
@@ -164,7 +164,7 @@ matchOp op = do
   guard $ ident == op
 
 desugarOperatorSections :: forall m. (Applicative m, MonadSupply m, MonadError MultipleErrors m) => Module -> m Module
-desugarOperatorSections (Module ss coms mn ds exts) = Module ss coms mn <$> mapM goDecl ds <*> pure exts
+desugarOperatorSections (Module header ds) = Module header <$> mapM goDecl ds
   where
 
   goDecl :: Declaration -> m Declaration

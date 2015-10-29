@@ -153,18 +153,18 @@ applyExternsFileToEnvironment ExternsFile{..} = flip (foldl' applyDecl) efDeclar
 
 -- | Generate an externs file for all declarations in a module
 moduleToExternsFile :: Module -> Environment -> ExternsFile
-moduleToExternsFile (Module _ _ _ _ Nothing) _ = internalError "moduleToExternsFile: module exports were not elaborated"
-moduleToExternsFile (Module _ _ mn ds (Just exps)) env = ExternsFile{..}
+moduleToExternsFile (Module (ModuleHeader { mhExports = Nothing }) _) _ = internalError "moduleToExternsFile: module exports were not elaborated"
+moduleToExternsFile (Module (ModuleHeader{..}) ds) env = ExternsFile{..}
   where
   efVersion       = showVersion Paths.version
-  efModuleName    = mn
-  efExports       = exps
-  efImports       = mapMaybe importDecl ds
+  efModuleName    = mhModuleName
+  Just efExports  = mhExports
+  efImports       = map importDecl mhImports
   efFixities      = mapMaybe fixityDecl ds
   efDeclarations  = concatMap toExternsDeclaration efExports
 
   fixityDecl :: Declaration -> Maybe ExternsFixity
-  fixityDecl (FixityDeclaration (Fixity assoc prec) op) = fmap (const (ExternsFixity assoc prec op)) (find exportsOp exps)
+  fixityDecl (FixityDeclaration (Fixity assoc prec) op) = fmap (const (ExternsFixity assoc prec op)) (find exportsOp efExports)
     where
     exportsOp :: DeclarationRef -> Bool
     exportsOp (PositionedDeclarationRef _ _ r) = exportsOp r
@@ -173,41 +173,39 @@ moduleToExternsFile (Module _ _ mn ds (Just exps)) env = ExternsFile{..}
   fixityDecl (PositionedDeclaration _ _ d) = fixityDecl d
   fixityDecl _ = Nothing
 
-  importDecl :: Declaration -> Maybe ExternsImport
-  importDecl (ImportDeclaration m mt qmn) = Just (ExternsImport m mt qmn)
-  importDecl (PositionedDeclaration _ _ d) = importDecl d
-  importDecl _ = Nothing
+  importDecl :: ImportDeclaration -> ExternsImport
+  importDecl (ImportDeclaration m mt qmn) = ExternsImport m mt qmn
 
   toExternsDeclaration :: DeclarationRef -> [ExternsDeclaration]
   toExternsDeclaration (PositionedDeclarationRef _ _ r) = toExternsDeclaration r
   toExternsDeclaration (TypeRef pn dctors) =
-    case Qualified (Just mn) pn `M.lookup` types env of
+    case Qualified (Just mhModuleName) pn `M.lookup` types env of
       Nothing -> internalError "toExternsDeclaration: no kind in toExternsDeclaration"
       Just (kind, TypeSynonym)
-        | Just (args, synTy) <- Qualified (Just mn) pn `M.lookup` typeSynonyms env -> [ EDType pn kind TypeSynonym, EDTypeSynonym pn args synTy ]
+        | Just (args, synTy) <- Qualified (Just mhModuleName) pn `M.lookup` typeSynonyms env -> [ EDType pn kind TypeSynonym, EDTypeSynonym pn args synTy ]
       Just (kind, ExternData) -> [ EDType pn kind ExternData ]
       Just (kind, tk@(DataType _ tys)) ->
         EDType pn kind tk : [ EDDataConstructor dctor dty pn ty args
                             | dctor <- fromMaybe (map fst tys) dctors
-                            , (dty, _, ty, args) <- maybeToList (M.lookup (Qualified (Just mn) dctor) (dataConstructors env))
+                            , (dty, _, ty, args) <- maybeToList (M.lookup (Qualified (Just mhModuleName) dctor) (dataConstructors env))
                             ]
       _ -> internalError "toExternsDeclaration: Invalid input"
   toExternsDeclaration (ValueRef ident)
-    | Just (ty, _, _) <- (mn, ident) `M.lookup` names env
+    | Just (ty, _, _) <- (mhModuleName, ident) `M.lookup` names env
     = [ EDValue ident ty ]
   toExternsDeclaration (TypeClassRef className)
-    | Just (args, members, implies) <- Qualified (Just mn) className `M.lookup` typeClasses env
-    , Just (kind, TypeSynonym) <- M.lookup (Qualified (Just mn) className) (types env)
-    , Just (_, synTy) <- Qualified (Just mn) className `M.lookup` typeSynonyms env
+    | Just (args, members, implies) <- Qualified (Just mhModuleName) className `M.lookup` typeClasses env
+    , Just (kind, TypeSynonym) <- M.lookup (Qualified (Just mhModuleName) className) (types env)
+    , Just (_, synTy) <- Qualified (Just mhModuleName) className `M.lookup` typeSynonyms env
     = [ EDType className kind TypeSynonym
       , EDTypeSynonym className args synTy
       , EDClass className args members implies
       ]
   toExternsDeclaration (TypeInstanceRef ident)
     = [ EDInstance tcdClassName ident tcdInstanceTypes tcdDependencies
-      | m1 <- maybeToList (M.lookup (Just mn) (typeClassDictionaries env))
+      | m1 <- maybeToList (M.lookup (Just mhModuleName) (typeClassDictionaries env))
       , m2 <- M.elems m1
-      , TypeClassDictionaryInScope{..} <- maybeToList (M.lookup (Qualified (Just mn) ident) m2)
+      , TypeClassDictionaryInScope{..} <- maybeToList (M.lookup (Qualified (Just mhModuleName) ident) m2)
       ]
   toExternsDeclaration _ = []
 

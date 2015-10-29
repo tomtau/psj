@@ -159,18 +159,19 @@ data RebuildPolicy
 --
 make :: forall m. (Functor m, Applicative m, Monad m, MonadBaseControl IO m, MonadReader Options m, MonadError MultipleErrors m, MonadWriter MultipleErrors m)
      => MakeActions m
-     -> [Module]
+     -> [ModuleHeader]
+     -> (ModuleName -> m Module)
      -> m Environment
-make MakeActions{..} ms = do
+make MakeActions{..} headers parseEntireModule = do
   checkModuleNamesAreUnique
 
-  (sorted, graph) <- sortModules ms
+  (sorted, graph) <- sortModules headers
 
-  barriers <- zip (map getModuleName sorted) <$> replicateM (length ms) ((,) <$> C.newEmptyMVar <*> C.newEmptyMVar)
+  barriers <- zip (map mhModuleName sorted) <$> replicateM (length headers) ((,) <$> C.newEmptyMVar <*> C.newEmptyMVar)
 
-  for_ sorted $ \m -> fork $ do
-    let deps = fromMaybe (internalError "make: module not found in dependency graph.") (lookup (getModuleName m) graph)
-    buildModule barriers (importPrim m) (deps `inOrderOf` map getModuleName sorted)
+  for_ sorted $ \header -> fork $ do
+    let deps = fromMaybe (internalError "make: module not found in dependency graph.") (lookup (mhModuleName header) graph)
+    buildModule barriers (importPrim header) (deps `inOrderOf` map mhModuleName sorted)
 
   -- Wait for all threads to complete, and collect errors.
   errors <- catMaybes <$> for barriers (takeMVar . snd . snd)
@@ -185,7 +186,7 @@ make MakeActions{..} ms = do
   where
   checkModuleNamesAreUnique :: m ()
   checkModuleNamesAreUnique =
-    case findDuplicate (map getModuleName ms) of
+    case findDuplicate (map mhModuleName headers) of
       Nothing -> return ()
       Just mn -> throwError . errorMessage $ DuplicateModuleName mn
 
@@ -202,8 +203,10 @@ make MakeActions{..} ms = do
   inOrderOf :: (Ord a) => [a] -> [a] -> [a]
   inOrderOf xs ys = let s = S.fromList xs in filter (`S.member` s) ys
 
-  buildModule :: [(ModuleName, (C.MVar (Maybe (MultipleErrors, ExternsFile)), C.MVar (Maybe MultipleErrors)))] -> Module -> [ModuleName] -> m ()
-  buildModule barriers m@(Module _ _ moduleName _ _) deps = flip catchError (markComplete Nothing . Just) $ do
+  buildModule :: [(ModuleName, (C.MVar (Maybe (MultipleErrors, ExternsFile)), C.MVar (Maybe MultipleErrors)))] -> ModuleHeader -> [ModuleName] -> m ()
+  buildModule barriers header deps = flip catchError (markComplete Nothing . Just) $ do
+    let moduleName = mhModuleName header
+
     -- We need to wait for dependencies to be built, before checking if the current
     -- module should be rebuilt, so the first thing to do is to wait on the
     -- MVars for the module's dependencies.
@@ -223,14 +226,16 @@ make MakeActions{..} ms = do
 
         let rebuild = do
               (exts, warnings) <- listen $ do
+                Module _ decls <- parseEntireModule moduleName
+                let m = Module header decls
                 progress $ CompilingModule moduleName
                 let env = foldl' (flip applyExternsFileToEnvironment) initEnvironment externs
                 lint m
                 ([desugared], nextVar) <- runSupplyT 0 $ desugar externs [m]
-                (checked@(Module ss coms _ elaborated exps), env') <- runCheck' env $ typeCheckModule desugared
+                (checked@(Module elabHeader elaborated), env') <- runCheck' env $ typeCheckModule desugared
                 checkExhaustiveModule env' checked
                 regrouped <- createBindingGroups moduleName . collapseBindingGroups $ elaborated
-                let mod' = Module ss coms moduleName regrouped exps
+                let mod' = Module elabHeader regrouped
                     corefn = CF.moduleToCoreFn env' mod'
                     [renamed] = renameInModules [corefn]
                     exts = moduleToExternsFile mod' env'
@@ -249,6 +254,7 @@ make MakeActions{..} ms = do
     where
     markComplete :: Maybe (MultipleErrors, ExternsFile) -> Maybe MultipleErrors -> m ()
     markComplete externs errors = do
+      let moduleName = mhModuleName header
       putMVar (fst $ fromMaybe (internalError "make: no barrier") $ lookup moduleName barriers) externs
       putMVar (snd $ fromMaybe (internalError "make: no barrier") $ lookup moduleName barriers) errors
 
@@ -270,16 +276,15 @@ make MakeActions{..} ms = do
 -- |
 -- Add an import declaration for a module if it does not already explicitly import it.
 --
-addDefaultImport :: ModuleName -> Module -> Module
-addDefaultImport toImport m@(Module ss coms mn decls exps)  =
-  if isExistingImport `any` decls || mn == toImport then m
-  else Module ss coms mn (ImportDeclaration toImport Implicit Nothing : decls) exps
+addDefaultImport :: ModuleName -> ModuleHeader -> ModuleHeader
+addDefaultImport toImport header =
+  if isExistingImport `any` mhImports header || mhModuleName header == toImport
+    then header
+    else header { mhImports = ImportDeclaration toImport Implicit Nothing : mhImports header }
   where
-  isExistingImport (ImportDeclaration mn' _ _) | mn' == toImport = True
-  isExistingImport (PositionedDeclaration _ _ d) = isExistingImport d
-  isExistingImport _ = False
+  isExistingImport (ImportDeclaration mn _ _) = mn == toImport
 
-importPrim :: Module -> Module
+importPrim :: ModuleHeader -> ModuleHeader
 importPrim = addDefaultImport (ModuleName [ProperName C.prim])
 
 -- |
@@ -320,8 +325,7 @@ buildMakeActions :: FilePath -- ^ the output directory
                  -> M.Map ModuleName FilePath -- ^ a map between module name and the file containing the foreign javascript for the module
                  -> Bool -- ^ Generate a prefix comment?
                  -> MakeActions Make
-buildMakeActions outputDir filePathMap foreigns usePrefix =
-  MakeActions getInputTimestamp getOutputTimestamp readExterns codegen progress
+buildMakeActions outputDir filePathMap foreigns usePrefix = MakeActions{..}
   where
 
   getInputTimestamp :: ModuleName -> Make (Either RebuildPolicy (Maybe UTCTime))

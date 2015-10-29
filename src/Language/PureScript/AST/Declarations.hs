@@ -40,16 +40,34 @@ import Language.PureScript.TypeClassDictionaries
 import Language.PureScript.Comments
 import Language.PureScript.Environment
 
+-- | The module header, including imports and exports.
+-- | This data is represented separately, so that we can avoid parsing every module to
+-- | determine module dependency order.
+data ModuleHeader = ModuleHeader
+  { mhSourceSpan :: SourceSpan          -- ^ Source span for the module
+  , mhComments :: [Comment]             -- ^ Module comments
+  , mhModuleName :: ModuleName          -- ^ Name of the module
+  , mhImports :: [ImportDeclaration]    -- ^ List of import declarations
+  , mhExports :: Maybe [DeclarationRef] -- ^ Optional list of module exports
+  } deriving (Show, Read, D.Data, D.Typeable)
+
+-- | A module import
+data ImportDeclaration = ImportDeclaration
+  { idModuleName :: ModuleName        -- ^ The name of the module being imported
+  , idType :: ImportDeclarationType   -- ^ The type of import
+  , idQualifiedAs :: Maybe ModuleName -- ^ The qualified name of this import
+  } deriving (Show, Read, D.Data, D.Typeable)
+
 -- |
 -- A module declaration, consisting of comments about the module, a module name,
 -- a list of declarations, and a list of the declarations that are
 -- explicitly exported. If the export list is Nothing, everything is exported.
 --
-data Module = Module SourceSpan [Comment] ModuleName [Declaration] (Maybe [DeclarationRef]) deriving (Show, Read, D.Data, D.Typeable)
+data Module = Module ModuleHeader [Declaration] deriving (Show, Read, D.Data, D.Typeable)
 
 -- | Return a module's name.
 getModuleName :: Module -> ModuleName
-getModuleName (Module _ _ name _ _) = name
+getModuleName (Module header _) = mhModuleName header
 
 -- |
 -- An item in a list of explicit imports or exports
@@ -154,10 +172,6 @@ data Declaration
   --
   | FixityDeclaration Fixity String
   -- |
-  -- A module import (module name, qualified/unqualified/hiding, optional "qualified as" name)
-  --
-  | ImportDeclaration ModuleName ImportDeclarationType (Maybe ModuleName)
-  -- |
   -- A type class declaration (name, argument, implies, member declarations)
   --
   | TypeClassDeclaration ProperName [(String, Maybe Kind)] [Constraint] [Declaration]
@@ -204,14 +218,6 @@ isDataDecl DataDeclaration{} = True
 isDataDecl TypeSynonymDeclaration{} = True
 isDataDecl (PositionedDeclaration _ _ d) = isDataDecl d
 isDataDecl _ = False
-
--- |
--- Test if a declaration is a module import
---
-isImportDecl :: Declaration -> Bool
-isImportDecl ImportDeclaration{} = True
-isImportDecl (PositionedDeclaration _ _ d) = isImportDecl d
-isImportDecl _ = False
 
 -- |
 -- Test if a declaration is a data type foreign import

@@ -23,12 +23,11 @@ import Control.Monad.Error.Class (MonadError(..))
 
 import Data.Graph
 import Data.List (nub)
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Maybe (fromMaybe)
 
 import Language.PureScript.Crash
 import Language.PureScript.AST
 import Language.PureScript.Names
-import Language.PureScript.Types
 import Language.PureScript.Errors
 
 -- | A list of modules with their transitive dependencies
@@ -38,9 +37,9 @@ type ModuleGraph = [(ModuleName, [ModuleName])]
 --
 -- Reports an error if the module graph contains a cycle.
 --
-sortModules :: (MonadError MultipleErrors m) => [Module] -> m ([Module], ModuleGraph)
+sortModules :: (MonadError MultipleErrors m) => [ModuleHeader] -> m ([ModuleHeader], ModuleGraph)
 sortModules ms = do
-  let verts = map (\m@(Module _ _ _ ds _) -> (m, getModuleName m, nub (concatMap usedModules ds))) ms
+  let verts = map (\header -> (header, mhModuleName header, nub (usedModules (mhImports header)))) ms
   ms' <- mapM toModule $ stronglyConnComp verts
   let (graph, fromVertex, toVertex) = graphFromEdges verts
       moduleGraph = do (_, mn, _) <- verts
@@ -49,32 +48,12 @@ sortModules ms = do
                            toKey i = case fromVertex i of (_, key, _) -> key
                        return (mn, filter (/= mn) (map toKey deps))
   return (ms', moduleGraph)
-
--- |
--- Calculate a list of used modules based on explicit imports and qualified names
---
-usedModules :: Declaration -> [ModuleName]
-usedModules = let (f, _, _, _, _) = everythingOnValues (++) forDecls forValues (const []) (const []) (const []) in nub . f
   where
-  forDecls :: Declaration -> [ModuleName]
-  forDecls (ImportDeclaration mn _ _) = [mn]
-  forDecls _ = []
+  usedModules :: [ImportDeclaration] -> [ModuleName]
+  usedModules = map (\(ImportDeclaration mn _ _) -> mn)
 
-  forValues :: Expr -> [ModuleName]
-  forValues (Var (Qualified (Just mn) _)) = [mn]
-  forValues (Constructor (Qualified (Just mn) _)) = [mn]
-  forValues (TypedValue _ _ ty) = forTypes ty
-  forValues _ = []
-
-  forTypes :: Type -> [ModuleName]
-  forTypes (TypeConstructor (Qualified (Just mn) _)) = [mn]
-  forTypes (ConstrainedType cs _) = mapMaybe (\(Qualified mn _, _) -> mn) cs
-  forTypes _ = []
-
--- |
--- Convert a strongly connected component of the module graph to a module
---
-toModule :: (MonadError MultipleErrors m) => SCC Module -> m Module
-toModule (AcyclicSCC m) = return m
-toModule (CyclicSCC [m]) = return m
-toModule (CyclicSCC ms) = throwError . errorMessage $ CycleInModules (map getModuleName ms)
+  -- | Convert a strongly connected component of the module graph to a module
+  toModule :: (MonadError MultipleErrors m) => SCC ModuleHeader -> m ModuleHeader
+  toModule (AcyclicSCC h) = return h
+  toModule (CyclicSCC [h]) = return h
+  toModule (CyclicSCC hs) = throwError . errorMessage $ CycleInModules (map mhModuleName hs)

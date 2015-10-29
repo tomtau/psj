@@ -24,6 +24,7 @@ import Control.Monad
 import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.Writer.Strict
 
+import Data.Maybe (fromMaybe)
 import Data.List (isSuffixOf, partition)
 import Data.Version (showVersion)
 import qualified Data.Map as M
@@ -69,9 +70,13 @@ compile (PSCMakeOptions inputGlob inputForeignGlob outputDir opts usePrefix) = d
     Right ((ms, foreigns), warnings) -> do
       when (P.nonEmpty warnings) $
         hPutStrLn stderr (P.prettyPrintMultipleWarnings (P.optionsVerboseErrors opts) warnings)
-      let filePathMap = M.fromList $ map (\(fp, P.Module _ _ mn _ _) -> (mn, fp)) ms
-          makeActions = buildMakeActions outputDir filePathMap foreigns usePrefix
-      (e, warnings') <- runMake opts $ P.make makeActions (map snd ms)
+      let filePathMap = M.fromList $ map (\(fp, m) -> (P.mhModuleName m, fp)) ms
+          makeActions = buildMakeActions outputDir (M.map Right filePathMap) foreigns usePrefix
+          parseEntireModule mn = do
+            let filePath = fromMaybe (P.internalError "compile: module name is not in map") (M.lookup mn filePathMap)
+            content <- liftIO $ readUTF8File filePath
+            P.parseModuleFromFile filePath content
+      (e, warnings') <- runMake opts $ P.make makeActions (map snd ms) parseEntireModule
       when (P.nonEmpty warnings') $
         hPutStrLn stderr (P.prettyPrintMultipleWarnings (P.optionsVerboseErrors opts) warnings')
       case e of
@@ -92,15 +97,15 @@ globWarningOnMisses warn = concatMapM globWithWarning
     return paths
   concatMapM f = liftM concat . mapM f
 
-readInput :: InputOptions -> IO [(Either P.RebuildPolicy FilePath, String)]
-readInput InputOptions{..} = forM ioInputFiles $ \inFile -> (Right inFile, ) <$> readUTF8File inFile
+readInput :: InputOptions -> IO [(FilePath, String)]
+readInput InputOptions{..} = forM ioInputFiles $ \inFile -> (inFile, ) <$> readUTF8File inFile
 
 parseInputs :: (Functor m, Applicative m, MonadError P.MultipleErrors m, MonadWriter P.MultipleErrors m)
-            => [(Either P.RebuildPolicy FilePath, String)]
+            => [(FilePath, String)]
             -> [(FilePath, P.ForeignJS)]
-            -> m ([(Either P.RebuildPolicy FilePath, P.Module)], M.Map P.ModuleName FilePath)
+            -> m ([(FilePath, P.ModuleHeader)], M.Map P.ModuleName FilePath)
 parseInputs modules foreigns =
-  (,) <$> P.parseModulesFromFiles (either (const "") id) modules
+  (,) <$> mapM (\(e, s) -> (,) e <$> P.parseModuleHeaderFromFile e s) modules
       <*> P.parseForeignModulesFromFiles foreigns
 
 inputFile :: Parser FilePath
