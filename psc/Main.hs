@@ -16,6 +16,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Main where
 
@@ -42,12 +43,14 @@ import qualified Language.PureScript as P
 import qualified Paths_purescript as Paths
 
 import Language.PureScript.Make
+import Language.PureScript.Externs
 
 import JSON
 
 data PSCMakeOptions = PSCMakeOptions
   { pscmInput        :: [FilePath]
   , pscmForeignInput :: [FilePath]
+  , pscmExternsInput :: [FilePath]
   , pscmOutputDir    :: FilePath
   , pscmOpts         :: P.Options
   , pscmUsePrefix    :: Bool
@@ -84,11 +87,12 @@ compile PSCMakeOptions{..} = do
   moduleFiles <- readInput (InputOptions pursFiles)
   inputForeign <- globWarningOnMisses warnFileTypeNotFound pscmForeignInput
   foreignFiles <- forM (inputForeign ++ jsFiles) (\inFile -> (inFile,) <$> readUTF8File inFile)
+  externsFiles <- globWarningOnMisses warnFileTypeNotFound pscmExternsInput
   (makeErrors, makeWarnings) <- runMake pscmOpts $ do
-    (ms, foreigns) <- parseInputs moduleFiles foreignFiles
+    (ms, foreigns, externs) <- parseInputs moduleFiles foreignFiles externsFiles
     let filePathMap = M.fromList $ map (\(fp, P.Module _ _ mn _ _) -> (mn, fp)) ms
         makeActions = buildMakeActions pscmOutputDir filePathMap foreigns pscmUsePrefix
-    P.make makeActions (map snd ms)
+    P.make makeActions externs (map snd ms)
   printWarningsAndErrors (P.optionsVerboseErrors pscmOpts) pscmJSONErrors makeWarnings makeErrors
   exitSuccess
 
@@ -107,18 +111,31 @@ globWarningOnMisses warn = concatMapM globWithWarning
 readInput :: InputOptions -> IO [(Either P.RebuildPolicy FilePath, String)]
 readInput InputOptions{..} = forM ioInputFiles $ \inFile -> (Right inFile, ) <$> readUTF8File inFile
 
-parseInputs :: (Functor m, Applicative m, MonadError P.MultipleErrors m, MonadWriter P.MultipleErrors m)
+parseInputs :: forall m. (Functor m, Applicative m, MonadIO m, MonadError P.MultipleErrors m, MonadWriter P.MultipleErrors m)
             => [(Either P.RebuildPolicy FilePath, String)]
             -> [(FilePath, P.ForeignJS)]
-            -> m ([(Either P.RebuildPolicy FilePath, P.Module)], M.Map P.ModuleName FilePath)
-parseInputs modules foreigns =
-  (,) <$> P.parseModulesFromFiles (either (const "") id) modules
-      <*> P.parseForeignModulesFromFiles foreigns
+            -> [FilePath]
+            -> m ([(Either P.RebuildPolicy FilePath, P.Module)], M.Map P.ModuleName FilePath, [ExternsFile])
+parseInputs modules foreigns externs =
+  (,,) <$> P.parseModulesFromFiles (either (const "") id) modules
+       <*> P.parseForeignModulesFromFiles foreigns
+       <*> mapM parseExterns externs
+  where
+  parseExterns :: FilePath -> m ExternsFile
+  parseExterns path = do
+    json <- liftIO $ readUTF8File path
+    maybe (throwError undefined) return $ decodeExterns json
 
 inputFile :: Parser FilePath
 inputFile = strArgument $
      metavar "FILE"
   <> help "The input .purs file(s)"
+
+externsFile :: Parser FilePath
+externsFile = strOption $
+     short 'e'
+  <> long "externs"
+  <> help "An input externs (.json) file"
 
 inputForeignFile :: Parser FilePath
 inputForeignFile = strOption $
@@ -190,6 +207,7 @@ options = P.Options <$> noTco
 pscMakeOptions :: Parser PSCMakeOptions
 pscMakeOptions = PSCMakeOptions <$> many inputFile
                                 <*> many inputForeignFile
+                                <*> many externsFile
                                 <*> outputDirectory
                                 <*> options
                                 <*> (not <$> noPrefix)

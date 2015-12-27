@@ -106,7 +106,7 @@ compile :: [FilePath] -> M.Map P.ModuleName FilePath -> IO (Either P.MultipleErr
 compile inputFiles foreigns = runTest $ do
   fs <- liftIO $ readInput inputFiles
   ms <- P.parseModulesFromFiles id fs
-  P.make (makeActions foreigns) (map snd ms)
+  P.make (makeActions foreigns) [] (map snd ms)
 
 assert :: [FilePath] ->
           M.Map P.ModuleName FilePath ->

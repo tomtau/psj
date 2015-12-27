@@ -21,6 +21,9 @@ module Language.PureScript.Make
   , Make(..)
   , runMake
   , buildMakeActions
+
+  -- * Externs
+  , decodeExterns
   ) where
 
 import Prelude ()
@@ -144,9 +147,10 @@ data RebuildPolicy
 --
 make :: forall m. (Functor m, Applicative m, Monad m, MonadBaseControl IO m, MonadReader Options m, MonadError MultipleErrors m, MonadWriter MultipleErrors m)
      => MakeActions m
+     -> [ExternsFile]
      -> [Module]
      -> m Environment
-make MakeActions{..} ms = do
+make MakeActions{..} exs ms = do
   checkModuleNamesAreUnique
 
   (sorted, graph) <- sortModules ms
@@ -195,7 +199,8 @@ make MakeActions{..} ms = do
     mexterns <- fmap unzip . sequence <$> traverse (readMVar . fst . fromMaybe (internalError "make: no barrier") . flip lookup barriers) deps
 
     case mexterns of
-      Just (_, externs) -> do
+      Just (_, depExs) -> do
+        let externs = exs ++ depExs
         outputTimestamp <- getOutputTimestamp moduleName
         dependencyTimestamp <- maximumMaybe <$> traverse (fmap shouldExist . getOutputTimestamp) deps
         inputTimestamp <- getInputTimestamp moduleName
@@ -247,11 +252,11 @@ make MakeActions{..} ms = do
   shouldExist (Just t) = t
   shouldExist _ = internalError "make: dependency should already have been built."
 
-  decodeExterns :: Externs -> Maybe ExternsFile
-  decodeExterns bs = do
-    externs <- decode (fromString bs)
-    guard $ efVersion externs == showVersion Paths.version
-    return externs
+decodeExterns :: Externs -> Maybe ExternsFile
+decodeExterns bs = do
+  externs <- decode (fromString bs)
+  guard $ efVersion externs == showVersion Paths.version
+  return externs
 
 importPrim :: Module -> Module
 importPrim = addDefaultImport (ModuleName [ProperName C.prim])
