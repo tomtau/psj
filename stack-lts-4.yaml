@@ -1,0 +1,8 @@
+flags: {}
+packages:
+- '.'
+- location:
+    git: git@github.com:tomtau/fcore.git
+    commit: 5e70684a33b581a8400e6061bf2d41ea300891e5
+extra-deps: []
+resolver: lts-4.0
